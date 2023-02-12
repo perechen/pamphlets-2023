@@ -1,0 +1,253 @@
+---
+title: "Sampling and custom stylo"
+author: "Artjoms Šeļa"
+date: '2023-02-12'
+output: html_document
+---
+
+For Day 1 we will look into some more manually driven stylo() function and some sampling strategies.  
+
+**DISCLAIMER.** This notebook uses base R and can be run just with `stylo()` installed. I never use base R in my work, though, and I don't think base R is 'simpler' for beginners (it is the opposite, in fact). My further materials will utilize `tidyverse`, so you maybe would want to run `install.packages("tidyverse")` before Friday.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,eval = T,message = F)
+```
+
+```{r}
+## load library
+library(stylo)
+```
+
+
+## Variables and attributes
+
+We have a folder name that is not the default `corpus/` that stylo() look for by default. We can directly tell `stylo()` where to look for it.  
+
+We also save `stylo()` output to `res1` variable. ## R uses "<-" (shortcut: `shift + ctrl + —`) to assign values to variables, but `=` also works just fine (for most of the cases)!
+
+
+```{r,message=FALSE}
+res1 <- stylo(gui=F, ## switch off GUI for now
+              corpus.dir="corpus_carre/") ## custom directory
+
+```
+
+What is inside the results variable?
+
+
+
+```{r}
+summary(res1)
+```
+  
+Use `$` to access different parts of `res1`. `$` - is a special indexing operator in R for access to lists and tables.
+
+```{r}
+dt <- res1$distance.table ### e.g. distance table...
+features <- res1$features.actually.used ### used features in the analysis...
+freqs <- res1$frequencies.0.culling ### or document-term frequencies...
+```
+
+## Normal sampling
+
+Normal sampling will chunk the texts sequentially by `sample.size` setting, striving for max number of samples available in each document.
+
+```{r}
+res_normal <- stylo(gui=F, ## no gui
+              corpus.dir="corpus_carre/", ## custom directory
+              analyzed.features = "w", ## a word is a token
+              mfw.min = 100, ## max and min MFWs
+              mfw.max = 100,
+              sampling="normal.sampling",
+              sample.size=2000,
+              distance.measure="wurzburg", ## distance measure (wurzburg == cosine delta; i know, it is confusing)
+              corpus.lang = "Other", ## corpus lang
+              analysis.type="CA")  ## switch to MDS to see that CA might mislead interpretation
+```
+
+
+## Random sampling
+
+Let's now take 100 x 2000 words sample per each document. No text here is large enough to have 200k words, so we are actually reshuffling same information to see the extend of its distribution. One can also call it 'bootstrapping'.
+
+```{r, message=F}
+res_rand <- stylo(gui=F, ## no gui
+                  corpus.dir="corpus_carre/", ## custom directory
+                  analyzed.features = "w", ## a word is a token
+                  mfw.min = 100, ## max and min MFWs
+                  mfw.max = 100,
+                  sampling="random.sampling",
+                  sample.size=2000,
+                  number.of.samples = 100, ## 'bootstrapping` texts here, taking more than they can provide
+                  distance.measure="wurzburg", ## distance measure (wurzburg == cosine delta; i know, it is confusing)
+                  corpus.lang = "Other", ## corpus lang
+                  text.id.on.graphs = "points", ## switch to points instead of labels
+                  dump.samples = T, ## stylo will save samples in a folder
+                  analysis.type="MDS") 
+
+```
+  
+## Custom frequencies, sample combinations  
+
+Now, let's say you'd want to combine "bootstrapped" candidate authors and full (or normal-sampled) Anonymous. There are multiple ways to do it.
+
+1. The easiest would be just to make a new folder, where we would combine different files. That, however, could be tedious and also poorly documented: you might forget the procedure and get lost in your folders. In code, this also looks awkward: e.g. where does this "combo" folder came up?? You remember it today, but tomorrow it would be a philological mystery to solve.
+
+```{r}
+res_combo1 <- stylo(gui=F,
+                    corpus.dir="combo/",
+                    analysis.type="MDS",
+                    sampling="no.sampling",
+                    text.id.on.graphs = "points"
+                    )
+```
+
+2. Instead, we can combine frequencies of samples in R directly. In the end of the day, a set of numbers with labels is really what `stylo()` cares about. We have everything for it, because we saved all our results before, the only thing we need is to catch document names and combine everything in a new table.
+
+```{r}
+f_norm <- res_normal$frequencies.0.culling ## new variable with all frequencies from `normal sampling run'
+rows_anon <- grep("^Anon", rownames(f_norm)) ## some regexp to catch all rows that start with (^) "Anon"
+
+f_norm_anon <- f_norm[rows_anon,] ## subset the table only by rows that start with Anon
+dim(f_norm_anon) ## 11 rows and 5000 columns (features, stylo's default cut off)
+```
+Now, to remove 'Anonyme' samples from our random sampling results. we can just use "-" (subract) to remove unwanted Anonyme rows.
+
+```{r}
+f_rand <- res_rand$frequencies.0.culling ## all random samples frequencies
+rows_anon <- grep("^Anon", rownames(f_rand)) ## random Anonymous samples
+
+f_clean <- f_rand[-rows_anon,] ## remove from random samples
+```
+
+Now, just combine the two tables with `rbind()` (bind rows).
+
+```{r}
+f_combo <- rbind(f_norm_anon, f_clean)
+dim(f_combo) ## 311 x 5000 matrix. 
+```
+Now, we have the data to directly inject it to `stylo()` analysis pipeline without preprocessing etc, by feeding the table to `frequencies=` attribute.
+
+```{r}
+
+res_combo2 <- stylo(gui=F, ## no gui
+                    frequencies = f_combo, ## all you need for stylo to run, no actual raw corpus needed
+                    mfw.min = 100, ## max and min MFWs
+                    mfw.max = 100,
+                    sampling="no.sampling",
+                    distance.measure="wurzburg", ## distance measure (wurzburg == cosine delta; i know, it is confusing)
+                    corpus.lang = "Other", ## corpus lang
+                    analysis.type="CA")
+```
+  
+In the end, it combines Anonymous texts (normal sampled) with Sieyes (random sampled), providing a *very different picture* from before. **Mixing sampling strategies is bad idea!** As you see, everything can influence frequency distribution of features. Always good to be sceptical of pictures, you see how they can be easily manipulated.
+
+## Comparing distances distributions
+
+Let's go back to oversampling strategy that we saved in `res_rand`. What we really are interested in is not what CA or MDS shows us, but overall patterns of similarity. You can approach it by looking at distances distributions directly. To demonstrate it, let's make a bare-bones comparison of "different authors" vs. "same authors" distances from bootstrapped texts (because we have a lot of 'estimates' for between-sample distances).
+
+First, let's grab the distance table that is a square matrix that holds each pair-wise distance measurement in our corpus (since we had each of 5 texts sampled 100 times, it is a **500 x 500 matrix**)  
+
+```{r}
+dists <- res_rand$distance.table ## saving distances in a new variable
+dim(dists) ## number of rows x columns
+```
+The key is to subset distance matrix by known authors and see how distances are distributed 'wihin same author' and 'between different authors' to establish some baseline of what we're looking for.   
+
+```{r}
+## distances within one author
+bar <- grep("^Barnave", rownames(dists)) ## rows with Barnave
+sie <- grep("^Siéyès", rownames(dists))  ## rows with Sieyes 
+
+d_b <- dists[bar,bar] ## barnave distances to barnave ('same author')
+d_s <- dists[sie,sie] ## sieyes distances to sieyes ('same author')
+
+d_other <- dists[bar,sie] ## barnave distances to sieyes ('different author')
+```
+
+Now, to plotting (base R plotting is a horror..)
+
+```{r}
+hgA <- hist(c(d_b,d_s),  breaks = seq(0,2,by=0.05),plot = FALSE) # Save first histogram data
+hgB <- hist(d_other, breaks=seq(0,2,by=0.05), plot = FALSE) # Save 2nd histogram data
+
+plot(hgA, col = "lightblue",main="Within- (blue) and outside- (pink) author distances",xlab = "Distance") # Plot 1st histogram 
+plot(hgB, col = "pink", add = TRUE) # add 2nd histogram
+
+```
+  
+Of course it is a toy example with two authors, but our method (100 MFWs, cosine distance) clearly catches the difference between 'distances of the same hand' and 'distances between different hands'.  
+
+What we are left to do is just drop at these 'two hills' new data with the different behaviour of Anonymes.  
+First, determining the rows and subsetting the distance matrix in various ways.
+
+```{r}
+anon1 <- grep("^Anonyme_Le", rownames(dists))
+anon2 <- grep("^Anonyme_Plan",rownames(dists))
+
+d_anon_in <- dists[anon1,anon2] ## distances between two Anonymes
+
+d_anon1_b <- dists[anon1,bar] ## distances between Anonyme Le... and Barnave
+d_anon1_s <- dists[anon1,sie] ## distances between Anonyme Le... and Sieyes
+d_anon2_b <- dists[anon2,bar] ## distances between Anonyme Le... and Barnave
+d_anon2_s <- dists[anon2,sie] ## distances between Anonyme Le... and Sieyes
+
+
+
+```
+
+
+
+### Anonyme 'Le réveil...' vs. Anonyme 'Plan' 
+
+```{r}
+hgC <- hist(d_anon_in, breaks=seq(0,2,by=0.05), plot = FALSE)
+
+plot(hgA, col = "lightblue",main="Distances between two Anonymes",xlab = "Distance") # Plot 1st histogram 
+plot(hgB, col = "pink", add = TRUE) # add 2nd histogram
+plot(hgC,col="red",add=TRUE) # add Anon vs Anon data
+```
+  
+### Anonyme 'Le réveil...' vs. Barnave
+
+```{r}
+hgC <- hist(d_anon1_b, breaks=seq(0,2,by=0.05), plot = FALSE)
+
+plot(hgA, col = "lightblue",main="Distances between Anonyme 'Le' and Barnave",xlab = "Distance") # Plot 1st histogram 
+plot(hgB, col = "pink", add = TRUE) # add 2nd histogram
+plot(hgC,col="red",add=TRUE)
+
+```
+  
+### Anonyme 'Le réveil...' vs. Siéyès
+
+```{r}
+hgC <- hist(d_anon1_s, breaks=seq(0,2,by=0.05), plot = FALSE)
+
+plot(hgA, col = "lightblue",main="Distances between Anonyme 'Le' and Siéyès",xlab = "Distance") # Plot 1st histogram 
+plot(hgB, col = "pink", add = TRUE) # add 2nd histogram
+plot(hgC,col="red",add=TRUE)
+
+```
+  
+  
+### Anonyme 'Plan pour...' vs. Barnave
+
+```{r}
+hgC <- hist(d_anon2_b, breaks=seq(0,2,by=0.05), plot = FALSE)
+plot(hgA, col = "lightblue",main="Distances between Anonyme 'Plan pour...' and Barnave",xlab = "Distance") # Plot 1st histogram 
+plot(hgB, col = "pink", add = TRUE) # add 2nd histogram
+plot(hgC,col="red",add=TRUE)
+```
+  
+### Anonyme 'Plan pour...' vs. Siéyès
+  
+```{r}
+hgC <- hist(d_anon2_s, breaks=seq(0,2,by=0.05), plot = FALSE)
+
+plot(hgA, col = "lightblue",main="Distances between Anonyme 'Plan pour...' and Siéyès",xlab = "Distance") # Plot 1st histogram 
+plot(hgB, col = "pink", add = TRUE) # add 2nd histogram
+plot(hgC,col="red",add=TRUE)
+```
+
+A lesson here? Given the *very* limited scope of the data, if Barnave and Siéyès were the two candidate authors, it is likely that none of them authored Anonymous texts. It is also unlikely that two Anonymous texts come from the same author (**given the data!**). 
